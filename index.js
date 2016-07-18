@@ -46,6 +46,12 @@ API.authenticate = function(data) {
 	require('./routes/v1/middleware').requireUser(data.req, data.res, data.next);
 };
 
+API.authenticateRouterPage = function (req, res, next) {
+	require('./routes/v1/middleware').determineUser(req, res, function (err) {
+		next(); // ignore errors
+	});
+};
+
 API.reloadSettings = function(hash) {
 	if (!hash || hash === 'settings:writeapi') {
 		meta.settings.get('writeapi', function(err, settings) {

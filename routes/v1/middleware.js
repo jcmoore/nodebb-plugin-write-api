@@ -13,16 +13,22 @@ var passport = require.main.require('passport'),
 	writeApi = module.parent.parent.parent.exports,
 	Middleware = {};
 
-Middleware.requireUser = function(req, res, next) {
+function AuthError (native, code, json) {
+	this.native = native || null;
+	this.code = code || 0;
+	this.json = json || null;
+}
+
+Middleware.determineUser = function(req, res, next) {
 	if (req.headers.hasOwnProperty('authorization')) {
 		passport.authenticate('bearer', { session: false }, function(err, user) {
-			if (err) { return next(err); }
-			if (!user) { return errorHandler.respond(401, res); }
+			if (err) { return next(new AuthError(err, 0, null)); }
+			if (!user) { return next(new AuthError(null, 401, null)); }
 
 			// If the token received was a master token, a _uid must also be present for all calls
 			if (user.hasOwnProperty('uid')) {
 				req.login(user, function(err) {
-					if (err) { return errorHandler.respond(500, res); }
+					if (err) { return next(new AuthError(null, 500, null)); }
 
 					req.uid = user.uid;
 					next();
@@ -33,52 +39,65 @@ Middleware.requireUser = function(req, res, next) {
 					delete user.master;
 
 					req.login(user, function(err) {
-						if (err) { return errorHandler.respond(500, res); }
+						if (err) { return next(new AuthError(null, 500, null)); }
 
 						req.uid = user.uid;
 						next();
 					});
 				} else {
-					res.status(400).json(errorHandler.generate(
+
+					return next(new AuthError(null, 400, errorHandler.generate(
 						400, 'params-missing',
 						'Required parameters were missing from this API call, please see the "params" property',
 						['_uid']
-					));
+					)));
 				}
 			} else {
-				return errorHandler.respond(500, res);
+				return next(new AuthError(null, 500, null));
 			}
 		})(req, res, next);
-	} else if (writeApi.settings['jwt:enabled'] === 'on' && writeApi.settings.hasOwnProperty('jwt:secret')) {
+	} else if (writeApi.settings && writeApi.settings['jwt:enabled'] === 'on' && writeApi.settings.hasOwnProperty('jwt:secret')) {
 		var token = (writeApi.settings['jwt:payloadKey'] ? (req.query[writeApi.settings['jwt:payloadKey']] || req.body[writeApi.settings['jwt:payloadKey']]) : null) || req.query.token || req.body.token;
 		jwt.verify(token, writeApi.settings['jwt:secret'], {
 			ignoreExpiration: true,
 		}, function(err, decoded) {
 			if (!err && decoded) {
 				if (!decoded.hasOwnProperty('_uid')) {
-					return res.status(400).json(errorHandler.generate(
+					return next(new AuthError(null, 400, errorHandler.generate(
 						400, 'params-missing',
 						'Required parameters were missing from this API call, please see the "params" property',
 						['_uid']
-					));
+					)));
 				}
 
 				req.login({
 					uid: decoded._uid
 				}, function(err) {
-					if (err) { return errorHandler.respond(500, res); }
+					if (err) { return next(new AuthError(null, 500, null)); }
 
 					req.uid = decoded._uid
 					req.body = decoded;
 					next();
 				});
 			} else {
-				errorHandler.respond(401, res);
+				return next(new AuthError(null, 401, null));
 			}
 		});
 	} else {
-		errorHandler.respond(401, res);
+		return next(new AuthError(null, 401, null));
 	}
+};
+
+Middleware.requireUser = function(req, res, next) {
+	return Middleware.determineUser(req, res, function (err) {
+		if (err) {
+			if (err.native) return next(err.native);
+			else if (err.json) return res.status(err.code).json(err.json);
+			else return errorHandler.respond(err.code, res);
+		}
+
+		return next();
+	});
 };
 
 Middleware.requireAdmin = function(req, res, next) {
